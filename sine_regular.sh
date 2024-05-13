@@ -1,0 +1,1 @@
+python run_regular.py --dataset sine --w_kl .007 --w_pred .005
