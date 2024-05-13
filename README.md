@@ -1,5 +1,5 @@
 # KoVAE
-[Koopman VAE (KoVAE)][https://openreview.net/pdf?id=eY7sLb0dVF], a new generative framework that is based on a novel design for the model prior.
+[Koopman VAE (KoVAE)](https://openreview.net/pdf?id=eY7sLb0dVF), a new generative framework that is based on a novel design for the model prior.
 
 <div align=center><img src="fig/arch_fig.png" width="100%"></div>
 
