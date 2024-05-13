@@ -5,6 +5,8 @@ Koopman VAE (KoVAE), a new generative framework that is based on a novel design 
 
 ## Training
 
+First, install the environment from the yaml file given here: environment.yml
+
 In the repository, you can find a training code on the sine and stocks datasets.
 To run the training process on the sine dataset or stock dataset, run the script of sine_regular.sh or stock_regular.sh respectively.
 
