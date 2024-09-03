@@ -30,7 +30,7 @@ You can also run the irregular setup with a similar command, adding a missing ra
 python3 run_irregular.py --dataset <data_name> --w_kl <a> --w_pred <b> --missing_value 0.<x> --inp_dim <num_of_channels_in_dataset>
 ```
 
-## Paper
+## :page_facing_up: Paper
 ```bibtex
 @inproceedings{
 naiman2024generative,
