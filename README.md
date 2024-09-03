@@ -3,7 +3,7 @@
 
 <div align=center><img src="fig/arch_fig.png" width="100%"></div>
 
-## Environment
+## :snake: Environment
 Install the environment from the yaml file given here: environment.yml
 ```bash
 conda env create -f environment.yml
