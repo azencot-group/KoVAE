@@ -13,6 +13,10 @@ import numpy as np
 import os
 import torch
 import controldiffeq
+import pathlib
+
+
+PROJECT_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
 def to_tensor(data):
@@ -144,6 +148,102 @@ def real_data_loading(data_name, seq_len):
         data.append(temp_data[idx[i]])
 
     return data
+
+
+class TimeDataset_irregular(torch.utils.data.Dataset):
+    def __init__(self, seq_len, data_name, missing_rate=0.0):
+        SEED = 56789
+        base_loc = PROJECT_DIR / 'datasets'
+        loc = PROJECT_DIR / 'datasets' / (data_name + str(missing_rate))
+        # if data is in cache
+        if os.path.exists(loc):
+            tensors = load_data(loc)
+            self.train_coeffs = tensors['train_a'], tensors['train_b'], tensors['train_c'], tensors['train_d']
+            self.samples = tensors['data']
+            self.original_sample = tensors['original_data']
+            self.original_sample = np.array(self.original_sample)
+            self.samples = np.array(self.samples)
+            self.size = len(self.samples)
+        else:  # preprocess data according to missing rate
+            if not os.path.exists(base_loc):
+                os.mkdir(base_loc)
+            if not os.path.exists(loc):
+                os.mkdir(loc)
+
+            if data_name in ['stock', 'energy']:
+                data = np.loadtxt(f'./datasets/{data_name}_data.csv', delimiter=",", skiprows=1)
+                data = data[::-1]
+                norm_data = MinMaxScaler(data)
+                total_length = len(norm_data)
+                time = np.array(range(total_length)).reshape(-1, 1)
+            elif data_name == 'mujoco':
+                tensors = load_data(loc)
+                time = tensors['train_X'][:, :, :1].cpu().numpy()
+                data = tensors['train_X'][:, :, 1:].reshape(-1, 14).cpu().numpy()
+                norm_data = MinMaxScaler(data)
+                norm_data = norm_data.reshape(4620, seq_len, 14)
+            elif data_name == 'sine':
+                norm_data = sine_data_generation(no=10000, seq_len=24, dim=5)
+
+            self.original_sample = []
+            ori_seq_data = []
+
+            for i in range(len(norm_data) - seq_len + 1):
+                x = norm_data[i: i + seq_len].copy()
+                ori_seq_data.append(x)
+            idx = torch.randperm(len(ori_seq_data))
+            for i in range(len(ori_seq_data)):
+                self.original_sample.append(ori_seq_data[idx[i]])
+            orig_samples_np = np.array(self.original_sample)
+            self.X_mean = np.mean(orig_samples_np, axis=0).reshape(1, orig_samples_np.shape[1], orig_samples_np.shape[2])
+
+            generator = torch.Generator().manual_seed(SEED)
+            removed_points = torch.randperm(norm_data.shape[0], generator=generator)[
+                             :int(norm_data.shape[0] * missing_rate)].sort().values
+            norm_data[removed_points] = float('nan')
+            norm_data = np.concatenate((norm_data, time), axis=1)
+            seq_data = []
+            for i in range(len(norm_data) - seq_len + 1):
+                x = norm_data[i: i + seq_len]
+                seq_data.append(x)
+            self.samples = []
+            for i in range(len(seq_data)):
+                self.samples.append(seq_data[idx[i]])
+
+            self.samples = np.array(self.samples)
+
+            norm_data_tensor = torch.Tensor(self.samples[:, :, :-1]).float().cuda()
+
+            time = torch.FloatTensor(list(range(norm_data_tensor.size(1)))).cuda()
+            self.last = torch.Tensor(self.samples[:, :, -1][:, -1]).float()
+            self.train_coeffs = controldiffeq.natural_cubic_spline_coeffs(time, norm_data_tensor)
+            self.original_sample = torch.tensor(self.original_sample)
+            self.samples = torch.tensor(self.samples)
+
+            save_data(loc, data=self.samples,
+                      original_data=self.original_sample,
+                      train_a=self.train_coeffs[0],
+                      train_b=self.train_coeffs[1],
+                      train_c=self.train_coeffs[2],
+                      train_d=self.train_coeffs[3],
+                      )
+
+            self.original_sample = np.array(self.original_sample)
+            self.samples = np.array(self.samples)
+            self.size = len(self.samples)
+
+    def __getitem__(self, index):
+        batch_coeff = (self.train_coeffs[0][index].float(),
+                       self.train_coeffs[1][index].float(),
+                       self.train_coeffs[2][index].float(),
+                       self.train_coeffs[3][index].float())
+
+        self.sample = {'data': self.samples[index], 'inter': batch_coeff, 'original_data': self.original_sample[index]}
+
+        return self.sample  # self.samples[index]
+
+    def __len__(self):
+        return len(self.samples)
 
 
 def load_data(dir):

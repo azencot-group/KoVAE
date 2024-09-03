@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import models.losses as losses
+from models.neuralCDE import NeuralCDE
+from models.modules import FinalTanh
+
 
 def reparameterize(mean, logvar, random_sampling=True):
     # Reparametrization occurs only if random sampling is set to true, otherwise mean is returned
@@ -12,6 +15,36 @@ def reparameterize(mean, logvar, random_sampling=True):
         return z
     else:
         return mean
+
+
+class VKEncoderIrregular(nn.Module):
+    def __init__(self, args):
+        super(VKEncoderIrregular, self).__init__()
+        self.args = args
+        self.z_dim = self.args.z_dim
+        self.inp_dim = self.args.inp_dim
+        self.hidden_dim = self.args.hidden_dim
+        self.batch_norm = self.args.batch_norm
+        self.num_layers = self.args.num_layers
+
+        if self.batch_norm:
+            self.b_norm = nn.BatchNorm1d(self.hidden_dim * 2)
+
+        ode_func = FinalTanh(self.inp_dim, self.hidden_dim, self.hidden_dim, self.num_layers)
+        self.emb = NeuralCDE(func=ode_func, input_channels=self.inp_dim,
+                    hidden_channels=self.hidden_dim, output_channels=self.hidden_dim).to(args.device)
+        self.rnn = nn.GRU(input_size=self.hidden_dim, hidden_size=self.hidden_dim, bidirectional=True,
+                           num_layers=1, batch_first=True)
+
+
+    def forward(self, time, train_coeffs, final_index):
+        # encode
+        h = self.emb(time, train_coeffs, final_index)
+        h, _ = self.rnn(h)
+        if self.batch_norm:
+            h = self.b_norm(torch.permute(h, (0, 2, 1)))
+            h = torch.permute(h, (0, 2, 1))  # permute back to b x s x c
+        return h
 
 
 class VKEncoder(nn.Module):
@@ -59,7 +92,6 @@ class VKDecoder(nn.Module):
         return x_hat
 
 
-
 class KoVAE(nn.Module):
     def __init__(self, args):
         super(KoVAE, self).__init__()
@@ -70,8 +102,12 @@ class KoVAE(nn.Module):
         self.num_layers = args.num_layers
         self.seq_len = args.seq_len
         self.pinv_solver = args.pinv_solver
+        self.missing_value = args.missing_value
 
-        self.encoder = VKEncoder(self.args)
+        if self.missing_value > 0.:
+            self.encoder = VKEncoderIrregular(self.args)
+        else:
+            self.encoder = VKEncoder(self.args)
         self.decoder = VKDecoder(self.args)
 
         # ----- Prior of content is a uniform Gaussian and Prior of motion is an LSTM
@@ -87,10 +123,13 @@ class KoVAE(nn.Module):
         self.names = ['total', 'rec', 'kl', 'pred_prior']
 
 
-    def forward(self, x):
+    def forward(self, x, time=None, final_index=None):
 
         # ------------- ENCODING PART -------------
-        z = self.encoder(x)
+        if time is not None and final_index is not None:
+            z = self.encoder(time, x, final_index)
+        else:
+            z = self.encoder(x)
 
         # variational part for input
         z_mean = self.z_mean(z)
@@ -161,6 +200,7 @@ class KoVAE(nn.Module):
 
         if self.args.w_kl:
             kld_z = losses.kl_loss(z_post_mean, z_post_logvar, z_prior_mean, z_prior_logvar)
+            # kld_z = torch.clamp(kld_z, min=self.budget)
             kld_z = torch.sum(kld_z) / batch_size
             loss += a1 * kld_z
             agg_losses.append(kld_z)
